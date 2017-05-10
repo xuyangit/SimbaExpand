@@ -138,13 +138,15 @@ case class STJSparkR(left_key: Expression, right_key: Expression, l: Literal, te
       val compare_set = mutable.LinkedHashSet[(Point, ArrayData, InternalRow)]()
       for (i <- 0 to p - 1) {
         val str = x._2.getUTF8String(i).toString
-        invert_file.get(str).get.filter(y => {
-          val ll = y._2.numElements()
-          val rl = x._2.numElements()
-          sim * ll <= rl && sim * rl <= ll && y._1.minDist(x._1) <= dis
-        }).foreach(k => {
-          compare_set.add(k)
-        })
+        if(invert_file.contains(str)) {
+          invert_file.get(str).get.filter(y => {
+            val ll = y._2.numElements()
+            val rl = x._2.numElements()
+            sim * ll <= rl && sim * rl <= ll && y._1.minDist(x._1) <= dis
+          }).foreach(k => {
+            compare_set.add(k)
+          })
+        }
       }
       ans ++= compare_set.filter(c =>
         TextualUtil.simFilter(c._2, x._2, sim)).map(row => new JoinedRow(x._3, row._3))

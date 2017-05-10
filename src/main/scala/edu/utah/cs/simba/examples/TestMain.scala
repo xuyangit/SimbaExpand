@@ -18,10 +18,10 @@ package edu.utah.cs.simba.examples
 
 import edu.utah.cs.simba.SimbaContext
 import edu.utah.cs.simba.index.RTreeType
-import edu.utah.cs.simba.spatial.MBR
 import org.apache.spark.{SparkConf, SparkContext}
 
 import scala.collection.mutable.ListBuffer
+import scala.io.Source
 
 /**
   * Created by dongx on 11/14/2016.
@@ -40,33 +40,33 @@ object TestMain {
     import simbaContext.implicits._
     import simbaContext.SimbaImplicits._
 
-    for (i <- 1 to 10){
-      leftData += PointData( i + 0.0, i + 0.0, Array("A","B","C"), "a = " + i)
-      rightData += PointData(i + 0.0, i + 0.0, Array("A","B","C","D","F"), "a = " + (i + 1))
+    val file = Source.fromFile("C:\\Osm_Dataset\\osm_text_10000")
+    for(line <- file.getLines) {
+      val info = line.split(" ")
+      leftData += PointData(info(1).toDouble, info(2).toDouble, info(3).split("\\?").sorted, "a=" + info(0))
     }
-    for (i <- 11 to 100){
-      leftData += PointData( i + 0.0, i + 0.0, Array("A","B","C"), "a = " + i)
-      rightData += PointData(i + 0.0, i + 0.0, Array("A","B","C","D","F","G"), "a = " + (i + 1))
-    }
+    rightData = leftData
 
     val leftDF = sc.parallelize(leftData).toDF
     val rightDF = sc.parallelize(rightData).toDF
 
     leftDF.registerTempTable("point1")
 
+//    leftDF.index(RTreeType, "rt", Array("x", "y"))
+//    rightDF.index(RTreeType, "rt", Array("x", "y"))
+
     //simbaContext.sql("SELECT * FROM point1 WHERE x < 10").collect().foreach(println)
 
     //simbaContext.indexTable("point1", RTreeType, "rt", List("x", "y"))
-    leftDF.index(RTreeType, "rt", Array("x", "y"))
 
 //    val df = leftDF.knn(Array("x", "y"), Array(10.0, 10), 3)
 //    println(df.queryExecution)
 //    df.show()
 
 //    leftDF.range(Array("x", "y"), Array(4.0, 5.0), Array(111.0, 222.0)).show(100)
-//
-    leftDF.stJoin(rightDF, Array("x", "y"), Array("x", "y"), 1.5, "str_set", 0.5).show(100)
 
+    print(leftDF.stJoin(rightDF, Array("x", "y"), Array("x", "y"), 1, "str_set", 0.4).count())
+//
     sc.stop()
 
   }

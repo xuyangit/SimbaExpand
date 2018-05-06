@@ -174,14 +174,21 @@ class DataFrame private[simba](
         leftAttrs.head, LiteralUtil(k))))
   }
 
+  /*
+    Spatial-textual join, specified by spatial distance and textual jaccard similarity;
+    leftKeys and rightKeys are spatial keys specified by callers, textual attr corresponds
+    to a set of strings
+   */
   def stJoin(right: DataFrame, leftKeys: Array[String],
-             rightKeys: Array[String], dis : Double, textualKey: String, sim : Double) : DataFrame = withPlan {
+             rightKeys: Array[String], dis: Double, leftTextualKey: String, rightTextualKey: String,
+             sim: Double) : DataFrame = withPlan {
     val leftAttrs = getAttributes(leftKeys)
     val rightAttrs = getAttributes(rightKeys, right.queryExecution.analyzed.output)
-    val textAttr = getAttributes(Array(textualKey))
+    val leftTextAttr = getAttributes(Array(leftTextualKey))
+    val rightTextAttr = getAttributes(Array(rightTextualKey), right.queryExecution.analyzed.output)
     SpatialJoin(this.logicalPlan, right.logicalPlan, STJoin,
       Some(InCircleRangeWithSim(PointWrapper(rightAttrs),
-        PointWrapper(leftAttrs), LiteralUtil(dis), textAttr.head, LiteralUtil(sim))))
+        PointWrapper(leftAttrs), LiteralUtil(dis), leftTextAttr.head, rightTextAttr.head, LiteralUtil(sim))))
   }
 
   private def getAttributes(keys: Array[String], attrs: Seq[Attribute] = this.queryExecution.analyzed.output)

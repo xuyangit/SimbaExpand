@@ -111,6 +111,12 @@ private[simba] object SimbaConf {
   val INDEX_PARTITIONS = intConf("simba.index.partitions", defaultValue = Some(200))
   val JOIN_PARTITIONS = intConf("simba.join.partitions", defaultValue = Some(200))
   val DISTANCE_JION = stringConf("simba.join.distanceJoin", defaultValue = Some("DJSpark"))
+  val FALSE_RATE = doubleConf("simba.falseRate", defaultValue = Some(0.015625))
+  val ST_JOIN =
+    stringConf(
+      "simba.join.stjoin",
+      defaultValue = Some("STJSpark2R"),
+      doc = "set the implementation algorithm for spatial-textual join" )
   val KNN_JOIN = stringConf("simba.join.knnJoin", defaultValue = Some("RKJSpark"))
 
   // RTree Parameters
@@ -163,6 +169,7 @@ private[simba] class SimbaConf extends Serializable {
   private[simba] def indexPartitions: Int = getConf(INDEX_PARTITIONS)
   private[simba] def joinPartitions: Int = getConf(JOIN_PARTITIONS)
   private[simba] def distanceJoin: String = getConf(DISTANCE_JION)
+  private[simba] def stJoin: String = getConf(ST_JOIN)
   private[simba] def knnJoin: String = getConf(KNN_JOIN)
   private[simba] def partitionMethod: String = getConf(PARTITION_METHOD)
   private[simba] def maxEntriesPerNode: Int = getConf(MAX_ENTRIES_PER_NODE)
@@ -170,6 +177,7 @@ private[simba] class SimbaConf extends Serializable {
   private[simba] def voronoiPivotSetSize: Int = getConf(VORONOI_PIVOTSET_SIZE)
   private[simba] def thetaBoost: Int = getConf(THETA_BOOST)
   private[simba] def sampleRate: Double = getConf(SAMPLE_RATE)
+  private[simba] def falseRate: Double = getConf(FALSE_RATE)
   private[simba] def indexSelectivityEnable : Boolean = getConf(INDEX_SELECTIVITY_ENABLE)
   private[simba] def indexSelectivityThreshold : Double = getConf(INDEX_SELECTIVITY_THRESHOLD)
   private[simba] def indexSelectivityLevel : Int = getConf(INDEX_SELECTIVITY_LEVEL)

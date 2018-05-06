@@ -18,7 +18,7 @@
 package edu.utah.cs.simba.execution.join
 
 import edu.utah.cs.simba.execution.SimbaPlan
-import edu.utah.cs.simba.index.RTree
+import edu.utah.cs.simba.index.{AugmentRTree, PrefixFilterTree, RTree}
 import edu.utah.cs.simba.partitioner.{MapDPartition, STRPartition}
 import edu.utah.cs.simba.spatial.Point
 import edu.utah.cs.simba.util.{NumberUtil, ShapeUtils, TextualUtil}
@@ -29,13 +29,18 @@ import org.apache.spark.sql.execution.SparkPlan
 
 import scala.collection.mutable
 
-
-case class RSTJSpark(left_key: Expression, right_key: Expression, l: Literal, text_key: Expression, s: Literal,
-                     left: SparkPlan, right: SparkPlan) extends SimbaPlan {
+/*
+  Build R-Tree from left table, repartition right table so that only the i-th partition
+  of left and right table pair can be candidates; we then build R-Tree for one table, query
+  this R-Tree for each point of the other table and exam textual similarity in the end.
+ */
+case class STJSparkPFTree(left_key: Expression, right_key: Expression, l: Literal, lTextKey: Expression, rTextKey: Expression,
+                      s: Literal, left: SparkPlan, right: SparkPlan) extends SimbaPlan {
   override def output: Seq[Attribute] = left.output ++ right.output
 
   final val num_partitions = simbaContext.simbaConf.joinPartitions
   final val sample_rate = simbaContext.simbaConf.sampleRate
+  final val false_rate = simbaContext.simbaConf.falseRate
   final val max_entries_per_node = simbaContext.simbaConf.maxEntriesPerNode
   final val transfer_threshold = simbaContext.simbaConf.transferThreshold
   final val r = NumberUtil.literalToDouble(l)
@@ -74,14 +79,16 @@ case class RSTJSpark(left_key: Expression, right_key: Expression, l: Literal, te
       val ans = mutable.ListBuffer[InternalRow]()
       val right_data = rightIter.map(_._2).toArray
       if (right_data.length > 0) {
-        val right_index = RTree(right_data.map(_._1).zipWithIndex, max_entries_per_node)
-        leftIter.foreach {now =>
-          ans ++= right_index.circleRange(now._1, r)
-            .filter(x =>{
-              val leftText = TextualUtil.getText(text_key, left.output, now._2)
-              val rightText = TextualUtil.getText(text_key, left.output++right.output, right_data(x._2)._2)
-              TextualUtil.simFilter(leftText, rightText, sim)
-            }).map(x => new JoinedRow(now._2, right_data(x._2)._2))
+        val right_index = PrefixFilterTree(
+          right_data.zipWithIndex.map(x =>
+            (x._1._1, x._2, TextualUtil.getTextAsStrings(rTextKey, right.output, x._1._2))),
+          max_entries_per_node,
+          sim,
+          false_rate)
+        leftIter.foreach { now =>
+          val leftText = TextualUtil.getTextAsStrings(lTextKey, left.output, now._2)
+          ans ++= right_index.stSimilar(now._1, r, leftText, sim)
+            .map(x => new JoinedRow(now._2, right_data(x)._2))
         }
       }
       ans.iterator

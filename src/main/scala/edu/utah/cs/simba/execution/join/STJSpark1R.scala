@@ -18,25 +18,24 @@
 package edu.utah.cs.simba.execution.join
 
 import edu.utah.cs.simba.execution.SimbaPlan
-import edu.utah.cs.simba.index.RTree
+import edu.utah.cs.simba.index.{AugmentRTree, RTree}
 import edu.utah.cs.simba.partitioner.{MapDPartition, STRPartition}
 import edu.utah.cs.simba.spatial.Point
 import edu.utah.cs.simba.util.{NumberUtil, ShapeUtils, TextualUtil}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, JoinedRow, Literal}
-import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.execution.SparkPlan
 
 import scala.collection.mutable
 
 /*
-  Spatial-textual join based on Prefix filter of textual information. We first use textual matching then verify
-  the pairs. In this class, we also repartition right table so that only i-th partition of left and right can join
-  together.
+  Build R-Tree from left table, repartition right table so that only the i-th partition
+  of left and right table pair can be candidates; we then build R-Tree for one table, query
+  this R-Tree for each point of the other table and exam textual similarity in the end.
  */
-case class PSTJSpark(left_key: Expression, right_key: Expression, l: Literal, lTextKey: Expression, rTextKey: Expression,
-                     s: Literal, left: SparkPlan, right: SparkPlan) extends SimbaPlan {
+case class STJSpark1R(left_key: Expression, right_key: Expression, l: Literal, lTextKey: Expression, rTextKey: Expression,
+                      s: Literal, left: SparkPlan, right: SparkPlan) extends SimbaPlan {
   override def output: Seq[Attribute] = left.output ++ right.output
 
   final val num_partitions = simbaContext.simbaConf.joinPartitions
@@ -77,45 +76,19 @@ case class PSTJSpark(left_key: Expression, right_key: Expression, l: Literal, lT
 
     left_partitioned.zipPartitions(right_dup_partitioned) {(leftIter, rightIter) =>
       val ans = mutable.ListBuffer[InternalRow]()
-      val left_info = leftIter.toArray
-      val right_info = rightIter.map(_._2).toArray
-      var left_data = mutable.ListBuffer[(Point, ArrayData, InternalRow)]()
-      var right_data = mutable.ListBuffer[(Point, ArrayData, InternalRow)]()
-      left_data ++= left_info.map(x =>
-        (x._1, TextualUtil.getText(lTextKey, left.output, x._2), x._2)
-      )
-      right_data ++= right_info.map(x =>
-        (x._1, TextualUtil.getText(rTextKey, right.output, x._2), x._2)
-      )
-      //left_data.sortWith((x, y) => x._2.numElements() < y._2.numElements())
-      //right_data.sortWith((x, y) => x._2.numElements() < y._2.numElements())
-      val invert_file = mutable.HashMap[String, mutable.ListBuffer[(Point, ArrayData, InternalRow)]]()
-      right_data.foreach(x => {
-        val p = x._2.numElements() - Math.ceil(sim * x._2.numElements()).asInstanceOf[Int] + 1
-        for (i <- 0 to p - 1) {
-          val str = x._2.getUTF8String(i).toString
-          if (invert_file.contains(str)) invert_file.get(str).get.append(x)
-          else invert_file.put(str, mutable.ListBuffer[(Point, ArrayData, InternalRow)](x))
+      val right_data = rightIter.map(_._2).toArray
+      if (right_data.length > 0) {
+        val right_index = AugmentRTree(
+          right_data.zipWithIndex.map(x =>
+            (x._1._1, x._2, TextualUtil.getTextAsStrings(rTextKey, right.output, x._1._2))),
+          max_entries_per_node,
+          sim)
+        leftIter.foreach { now =>
+          val leftText = TextualUtil.getTextAsStrings(lTextKey, left.output, now._2)
+          ans ++= right_index.stSimilar(now._1, r, leftText, sim)
+            .map(x => new JoinedRow(now._2, right_data(x)._2))
         }
-      })
-      left_data.foreach(x => {
-        val p = x._2.numElements() - Math.ceil(sim * x._2.numElements()).asInstanceOf[Int] + 1
-        val compare_set = mutable.LinkedHashSet[(Point, ArrayData, InternalRow)]()
-        for (i <- 0 to p - 1) {
-          val str = x._2.getUTF8String(i).toString
-          if(invert_file.contains(str)) {
-            invert_file.get(str).get.filter(y => {
-              val ll = y._2.numElements()
-              val rl = x._2.numElements()
-              sim * ll <= rl && sim * rl <= ll && y._1.minDist(x._1) <= r
-            }).foreach(k => {
-              compare_set.add(k)
-            })
-          }
-        }
-        ans ++= compare_set.filter(c =>
-          TextualUtil.simFilter(c._2, x._2, sim)).map(row => new JoinedRow(x._3, row._3))
-      })
+      }
       ans.iterator
     }
   }

@@ -30,9 +30,13 @@ import org.apache.spark.sql.execution.SparkPlan
 
 import scala.collection.mutable
 
-
-case class STJSparkR(left_key: Expression, right_key: Expression, l: Literal, text_key: Expression, s: Literal,
-                     left: SparkPlan, right: SparkPlan) extends SimbaPlan {
+/*
+  Build R-Tree from left table, repartition right table so that only the i-th partition
+  of left and right table pair can be candidates; we then build R-Tree for left and right
+  partition, use PPJoin-R for these two trees
+ */
+case class STJSpark2R(left_key: Expression, right_key: Expression, l: Literal, lTextKey: Expression, rTextKey: Expression,
+                      s: Literal, left: SparkPlan, right: SparkPlan) extends SimbaPlan {
   override def output: Seq[Attribute] = left.output ++ right.output
 
   final val num_partitions = simbaContext.simbaConf.joinPartitions
@@ -61,21 +65,26 @@ case class STJSparkR(left_key: Expression, right_key: Expression, l: Literal, te
       iter => Array(iter.length).iterator
     }.collect()
 
+    // build global RTree from left table, each MBR has its bound, partition id and points size
     val left_rt = RTree(left_mbr_bound.zip(left_part_size).map(x => (x._1._1, x._1._2, x._2)),
       max_entries_per_node)
     val bc_rt = sparkContext.broadcast(left_rt)
 
+    // for each point of right table, calculate which MBR (partition) it can join
     val right_dup = right_rdd.flatMap {x =>
       bc_rt.value.circleRange(x._1, r).map(now => (now._2, x))
     }
 
+    // repartition right rdd so that, for the i-th partition of left rdd, all the
+    // points that can join this partition in right rdd are also in the i-th partition
     val right_dup_partitioned = MapDPartition(right_dup, left_mbr_bound.length)
 
     left_partitioned.zipPartitions(right_dup_partitioned) {(leftIter, rightIter) =>
       val ans = mutable.ListBuffer[InternalRow]()
       val left_data = leftIter.toArray
+      // right_data has extra partition attr so need to map
       val right_data = rightIter.map(_._2).toArray
-      if (left_data.length>0 && right_data.length > 0) {
+      if (left_data.length > 0 && right_data.length > 0) {
         val left_index = RTree(left_data.map(_._1).zipWithIndex, max_entries_per_node)
         val right_index = RTree(right_data.map(_._1).zipWithIndex, max_entries_per_node)
         doJoin(left_index.root, right_index.root, r, sim, ans, left_data, right_data)
@@ -90,16 +99,17 @@ case class STJSparkR(left_key: Expression, right_key: Expression, l: Literal, te
       result ++= PPJoin(left, right, dis, sim, l_data, r_data)
       return
     }
+    //
     val e_left = left.m_mbr.expand(dis)
     val e_right = right.m_mbr.expand(dis)
-    if(e_left.intersects(e_right)){
+    if(e_left.intersects(right.m_mbr)){
       val overlap = e_left.overLap(e_right)
       var left_entry = Array[RTreeNode]()
       var right_entry = Array[RTreeNode]()
       if(!left.isLeaf) left_entry ++= left.m_child.filter(x => x.intersects(overlap)).map(x => x.asInstanceOf[RTreeInternalEntry].node)
       else left_entry ++= Array(left)
       if(!right.isLeaf) right_entry ++= right.m_child.filter(x => x.intersects(overlap)).map(x => x.asInstanceOf[RTreeInternalEntry].node)
-      else left_entry ++= Array(right)
+      else right_entry ++= Array(right)
       left_entry.foreach(x => {
         right_entry.foreach(y => {
           if(x.m_mbr.expand(dis).intersects(y.m_mbr)) doJoin(x,y,dis,sim,result,l_data,r_data)
@@ -116,14 +126,14 @@ case class STJSparkR(left_key: Expression, right_key: Expression, l: Literal, te
     var right_data = mutable.ListBuffer[(Point, ArrayData, InternalRow)]()
     left_data ++= left_n.m_child.map(x => {
       val info = l_data(x.asInstanceOf[RTreeLeafEntry].m_data)
-      (info._1, TextualUtil.getText(text_key, left.output, info._2), info._2)
+      (info._1, TextualUtil.getText(lTextKey, left.output, info._2), info._2)
     })
     right_data ++= right_n.m_child.map(x => {
       val info = r_data(x.asInstanceOf[RTreeLeafEntry].m_data)
-      (info._1, TextualUtil.getText(text_key, left.output ++ right.output, info._2), info._2)
+      (info._1, TextualUtil.getText(lTextKey, left.output ++ right.output, info._2), info._2)
     })
-    left_data.sortWith((x, y) => x._2.numElements() < y._2.numElements())
-    right_data.sortWith((x, y) => x._2.numElements() < y._2.numElements())
+    //left_data.sortWith((x, y) => x._2.numElements() < y._2.numElements())
+    //right_data.sortWith((x, y) => x._2.numElements() < y._2.numElements())
     val invert_file = mutable.HashMap[String, mutable.ListBuffer[(Point, ArrayData, InternalRow)]]()
     right_data.foreach(x => {
       val p = x._2.numElements() - Math.ceil(sim * x._2.numElements()).asInstanceOf[Int] + 1

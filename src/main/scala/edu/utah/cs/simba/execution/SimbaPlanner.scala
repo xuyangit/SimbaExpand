@@ -92,7 +92,8 @@ class SimbaPlanner(val simbaContext: SimbaContext) extends SparkPlanner(simbaCon
               case p =>
                 Array(p.asInstanceOf[NamedExpression].toAttribute)
             }
-          case InCircleRangeWithSim(point: Expression, target: Expression, r: Literal, text: Expression, s: Literal) =>
+          case InCircleRangeWithSim(point: Expression, target: Expression, r: Literal,
+                                    lText: Expression, rText: Expression, s: Literal) =>
             point match {
               case wrapper: PointWrapper =>
                 wrapper.exps.map(_.asInstanceOf[NamedExpression].toAttribute)
@@ -163,19 +164,20 @@ class SimbaPlanner(val simbaContext: SimbaContext) extends SparkPlanner(simbaCon
   }
 
   object ExtractSTJoinKeys extends Logging with PredicateHelper {
-    type ReturnType = (Expression, Expression, Literal, Expression, Literal, SpatialJoinType, LogicalPlan, LogicalPlan)
+    type ReturnType = (Expression, Expression, Literal, Expression, Expression, Literal, SpatialJoinType, LogicalPlan, LogicalPlan)
 
     def unapply(plan: LogicalPlan): Option[ReturnType] = {
       plan match {
         case SpatialJoin(left, right, STJoin, condition) =>
           val children = condition.get.children
-          require(children.size == 5)
+          require(children.size == 6)
           val right_key = children.head
           val left_key = children(1)
           val dis = children(2).asInstanceOf[Literal]
-          val text_key = children(3)
+          val lTextKey = children(3)
+          val rTextKey = children(4)
           val sim = children.last.asInstanceOf[Literal]
-          Some((left_key, right_key, dis, text_key, sim, STJoin, left, right))
+          Some((left_key, right_key, dis, lTextKey, rTextKey, sim, STJoin, left, right))
         case _ => None
       }
     }
@@ -215,8 +217,27 @@ class SimbaPlanner(val simbaContext: SimbaContext) extends SparkPlanner(simbaCon
           case _ =>
             RDJSpark(leftKey, rightKey, r, planLater(left), planLater(right)) :: Nil
         }
-      case ExtractSTJoinKeys(leftKey, rightKey, r, textKey, s, STJoin, left, right) =>
-        STJSparkR(leftKey, rightKey, r, textKey, s, planLater(left), planLater(right)) :: Nil
+      case ExtractSTJoinKeys(leftKey, rightKey, r, lTextKey, rTextKey, s, STJoin, left, right) =>
+        simbaContext.simbaConf.stJoin match {
+          case "STJSpark2R" =>
+            STJSpark2R(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "STJSpark1R" =>
+            STJSpark1R(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "PSTJSpark" =>
+            PSTJSpark(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "AllPairsSTJSpark2R" =>
+            AllPairsSTJSpark2R(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "AllPairsSTJSpark1R" =>
+            AllPairsSTJSpark1R(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "AllPairsPSTJSpark" =>
+            AllPairsPSTJSpark(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "AllPairsSTJSparkPFTree" =>
+            AllPairsSTJSparkPFTree(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case "STJSparkPFTree" =>
+            STJSparkPFTree(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+          case _ =>
+            STJSpark2R(leftKey, rightKey, r, lTextKey, rTextKey, s, planLater(left), planLater(right)) :: Nil
+        }
       case _ => Nil
     }
   }

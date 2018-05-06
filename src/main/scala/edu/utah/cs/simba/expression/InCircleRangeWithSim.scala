@@ -21,18 +21,19 @@ import edu.utah.cs.simba.{ShapeSerializer, ShapeType}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal, Predicate}
-import org.apache.spark.sql.types.NumericType
+import org.apache.spark.sql.types.{NumericType, StringType}
 import edu.utah.cs.simba.spatial.{Circle, Point, Shape}
 import edu.utah.cs.simba.util.{NumberUtil, ShapeUtils}
 import org.apache.spark.sql.catalyst.util.GenericArrayData
 
 
-case class InCircleRangeWithSim(shape: Expression, target: Expression, radius: Literal, text: Expression, sim: Literal)
+case class InCircleRangeWithSim(shape: Expression, target: Expression, radius: Literal, lText: Expression,
+                                rText: Expression, sim: Literal)
   extends Predicate with CodegenFallback {
   require(radius.dataType.isInstanceOf[NumericType])
   require(sim.dataType.isInstanceOf[NumericType])
 
-  override def children: Seq[Expression] = Seq(shape, target, radius, text, sim)
+  override def children: Seq[Expression] = Seq(shape, target, radius, lText, rText, sim)
 
   override def nullable: Boolean = false
 

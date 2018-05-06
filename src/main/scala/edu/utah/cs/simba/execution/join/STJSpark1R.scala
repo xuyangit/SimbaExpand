@@ -76,17 +76,18 @@ case class STJSpark1R(left_key: Expression, right_key: Expression, l: Literal, l
 
     left_partitioned.zipPartitions(right_dup_partitioned) {(leftIter, rightIter) =>
       val ans = mutable.ListBuffer[InternalRow]()
-      val right_data = rightIter.map(_._2).toArray
+      val left_data = leftIter.toArray
+      val right_data = rightIter.toArray
       if (right_data.length > 0) {
-        val right_index = AugmentRTree(
-          right_data.zipWithIndex.map(x =>
-            (x._1._1, x._2, TextualUtil.getTextAsStrings(rTextKey, right.output, x._1._2))),
+        val left_index = AugmentRTree(
+          left_data.zipWithIndex.map(x =>
+            (x._1._1, x._2, TextualUtil.getTextAsStrings(lTextKey, left.output, x._1._2))),
           max_entries_per_node,
           sim)
-        leftIter.foreach { now =>
-          val leftText = TextualUtil.getTextAsStrings(lTextKey, left.output, now._2)
-          ans ++= right_index.stSimilar(now._1, r, leftText, sim)
-            .map(x => new JoinedRow(now._2, right_data(x)._2))
+        right_data.foreach { now =>
+          val leftText = TextualUtil.getTextAsStrings(rTextKey, right.output, now._2._2)
+          ans ++= left_index.stSimilar(now._2._1, r, leftText, sim)
+            .map(x => new JoinedRow(now._2._2, left_data(x)._2))
         }
       }
       ans.iterator
